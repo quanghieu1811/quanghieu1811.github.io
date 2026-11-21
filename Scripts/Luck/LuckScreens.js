@@ -1,0 +1,136 @@
+/*
+ * "Bạn có tạch đỉnh Olympia?" - the menu (picture, name, start), the stage fitted to the window,
+ * and the result card (standing, the player's luck, share / play again).
+ */
+(function () {
+	var gv = window.GameVariables, L = window.LUCK;
+	function $(id) { return document.getElementById(id); }
+
+	/* the 1920 x 1080 stage, as large as the window allows, centred */
+	function fit() {
+		var stage = document.querySelector('.stageContainerDiv'), frame = $('luckFrame');
+		if (!stage || !frame) { return; }
+		var s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+		stage.style.transform = 'scale(' + s + ')';
+		frame.style.width = Math.round(1920 * s) + 'px';
+		frame.style.height = Math.round(1080 * s) + 'px';
+	}
+
+	function modeHard() { return !!document.querySelector('#luckMode input[value="hard"]:checked'); }
+	var MODE_HELP = {
+		normal: 'Mỗi câu đúng 50%. Về đích: câu 20 điểm cần quay từ 71, câu 30 điểm được quay 3 lần.',
+		hard: 'Mỗi câu chỉ đúng 40%. Về đích: câu 20 điểm cần quay từ 76, câu 30 điểm chỉ được quay 2 lần.'
+	};
+	function showModeHelp() {
+		var mode = modeHard() ? 'hard' : 'normal';
+		$('luckModeHelp').textContent = MODE_HELP[mode];
+		document.querySelectorAll('#luckMenu [data-hard]').forEach(function (el) { el.textContent = el.getAttribute('data-' + mode); });   /* the rules on the left */
+	}
+
+	function start() {
+		var name = ($('luckName').value || '').trim().replace(/\s+/g, ' ').slice(0, 40) || 'Bạn';
+		try { localStorage.setItem('olympia-luck.name', name); } catch (e) { /* blocked */ }
+		/* this tap lets every later sound play (an iPad plays only elements a tap started) */
+		if (typeof unlockAudioPool === 'function') { unlockAudioPool(16, L.SILENCE); }
+		try { if (navigator.audioSession) { navigator.audioSession.type = 'playback'; } } catch (e) { /* not supported */ }
+		$('luckMenu').classList.add('gone');
+		L.started = true;
+		document.body.classList.add('playing');
+		L.hard = L.hard || modeHard();
+		try { localStorage.setItem('olympia-luck.mode', L.hard ? 'hard' : 'normal'); } catch (e) { /* blocked */ }
+		document.body.classList.toggle('hardcore', L.hard);
+		var seat = parseInt((document.querySelector('#luckSeats input:checked') || {}).value, 10) || 0;
+		try { localStorage.setItem('olympia-luck.seat', String(seat)); } catch (e) { /* blocked */ }
+		L.setSeats(name, seat);
+		L.shuffleQuestions();
+		L.play().then(showResult, function (e) { console.error('[Luck] the match stopped', e); });
+	}
+
+	function headline(me) {
+		if (me.place === 1) { return 'Bạn đã lên đỉnh Olympia - nhờ may thôi'; }
+		if (me.place === 2) { return 'Bạn đã tạch đỉnh Olympia - suýt nữa thì không tạch'; }
+		return 'Bạn đã tạch đỉnh Olympia';
+	}
+
+	function showResult(res) {
+		var me = res.me, st = res.stats;
+		var pct = st.rolls ? Math.round(100 * st.hits / st.rolls) : 0;
+		$('luckResTitle').textContent = headline(me);
+		$('luckResPlace').textContent = 'Hạng ' + me.place + ' · ' + me.score + ' điểm' + (L.hard ? ' · Hardcore' : '');
+		var ol = $('luckResList');
+		ol.textContent = '';
+		res.list.forEach(function (r) {
+			var li = document.createElement('li');
+			if (r.seat === L.me) { li.className = 'me'; }
+			var a = document.createElement('span'); a.textContent = r.place + '. ' + r.name;
+			var b = document.createElement('b'); b.textContent = r.score;
+			li.appendChild(a); li.appendChild(b);
+			ol.appendChild(li);
+		});
+		var vdRight = st.vd.filter(function (q) { return q.ok; }).length;
+		$('luckResLuck').textContent = 'Bạn đã quay ' + st.rolls + ' lần, trúng ' + st.hits + ' lần (' + pct + '%).' +
+			(st.vd.length ? ' Về đích: đúng ' + vdRight + '/' + st.vd.length + ' câu.' : '') +
+			(pct >= 55 ? ' Hôm nay bạn hên.' : pct <= 40 ? ' Hôm nay không phải ngày của bạn.' : ' Hên xui đúng như tên gọi.');
+		$('luckResult').classList.add('on');
+		L.lastShare = (me.place === 1 ? 'Tôi đã lên đỉnh Olympia nhờ may mắn với ' : 'Tôi đã tạch đỉnh Olympia với ') + me.score + ' điểm (hạng ' + me.place + '/4' + (L.hard ? ', chế độ Hardcore' : '') + '). Thử nhân phẩm của bạn:';
+	}
+
+	function share() {
+		var url = location.origin + '/olympia-luck/';
+		var text = L.lastShare || 'Bạn có tạch đỉnh Olympia?';
+		if (navigator.share) { navigator.share({ title: 'Bạn có tạch đỉnh Olympia?', text: text, url: url }).catch(function () {}); return; }
+		var all = text + ' ' + url;
+		(navigator.clipboard ? navigator.clipboard.writeText(all) : Promise.reject()).then(function () {
+			$('luckShare').textContent = 'Đã chép đường dẫn';
+		}, function () { prompt('Chép đường dẫn này:', all); });
+	}
+
+	document.addEventListener('DOMContentLoaded', function () {
+		fit();
+		window.addEventListener('resize', fit);
+		L.bindStage(document.querySelector('.stageContainerDiv'));
+		try { $('luckName').value = localStorage.getItem('olympia-luck.name') || ''; } catch (e) { /* blocked */ }
+		try {
+			var saved = localStorage.getItem('olympia-luck.seat') || '0';
+			var r = document.querySelector('#luckSeats input[value="' + saved + '"]');
+			if (r) { r.checked = true; }
+		} catch (e) { /* blocked */ }
+		try {
+			var mode = L.hard ? 'hard' : localStorage.getItem('olympia-luck.mode') || 'normal';
+			var m = document.querySelector('#luckMode input[value="' + mode + '"]');
+			if (m) { m.checked = true; }
+		} catch (e) { /* blocked */ }
+		showModeHelp();
+		document.querySelectorAll('#luckMode input').forEach(function (i) { i.addEventListener('change', showModeHelp); });
+		/* the start button: a shimmer until the stage and its questions are in, an inline error if they never come */
+		var form = $('luckForm'), btn = $('luckStart');
+		btn.disabled = true;
+		btn.setAttribute('aria-busy', 'true');
+		btn.setAttribute('aria-label', 'Đang dựng sân khấu');
+		L.until(function () { var vd = gv.VeDichQuestions, kd = gv.KhoiDongQuestions, v = gv.VcnvData; return !!(vd && vd[1] && vd[1][30] && vd[1][30].length && kd && kd.common && kd.common.length && v && v.rows && v.rows.length === 4 && gv.Players && gv.Players.length === 4); }, 20000).then(function (ok) {
+			btn.removeAttribute('aria-busy');
+			form.classList.remove('loading');
+			if (!ok) {
+				form.classList.add('failed');
+				btn.setAttribute('aria-label', 'Không vào thi được');
+				$('luckErr').textContent = 'Không tải được phòng thi (bộ câu hỏi hoặc đồ hoạ). Kiểm tra mạng rồi tải lại trang.';
+				return;
+			}
+			btn.disabled = false;
+			btn.removeAttribute('aria-label');
+			if (L.auto) { start(); }
+		});
+		$('luckForm').addEventListener('submit', function (e) { e.preventDefault(); if (!$('luckStart').disabled) { start(); } });
+		$('luckNext').addEventListener('click', L.skip);
+		$('luckBoard').addEventListener('click', function () {
+			L.togglePause();
+			var on = L.isPaused();
+			this.textContent = on ? 'Tiếp tục (F6)' : 'Bảng điểm (F6)';
+			this.setAttribute('aria-pressed', String(on));
+		});
+		/* F6 from the keyboard: keep the button's label in step */
+		document.addEventListener('keyup', function (e) { if (e.key === 'F6') { $('luckBoard').textContent = L.isPaused() ? 'Tiếp tục (F6)' : 'Bảng điểm (F6)'; } });
+		$('luckShare').addEventListener('click', share);
+		$('luckAgain').addEventListener('click', function () { location.href = location.pathname; });
+	});
+})();

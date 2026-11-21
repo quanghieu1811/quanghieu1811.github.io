@@ -1,0 +1,397 @@
+/*
+ * Olympia Controller - audio. The engine (default.html, in a room: the one the control panel runs)
+ * plays it; control.html never loads this file (the two pages would echo each other). In a room
+ * the stage and audience screens (audience.html) load it too, to play what the engine relays to
+ * them - see "where the sound plays" at the end.
+ *
+ * Seven channels, one HTMLAudioElement each, kept in window.GameVariables (same idea as Olga):
+ *
+ *   Olympia channel   Olga name              used for
+ *   ---------------   --------------------   -----------------------------------------------
+ *   StingerSound      GeneralSound           one-shot cues: start, open question, complete...
+ *   RoundBedSound     LongPassiveSound       music under a whole turn, with loop points
+ *   ResultSound       LongActiveSound        right / wrong
+ *   BuzzerSound       ShortActiveSound       the buzzer, the CNV signal
+ *   TimerSound        ShortPassiveSound      clock music of one question
+ *   StarSound         LifelineActiveSound    Ngôi sao hy vọng sting
+ *   AmbientSound      LifelinePassiveSound   score-summary music
+ *
+ * A channel plays one file at a time (a new file cuts the old one). With overlap = true the file
+ * is fire-and-forget instead: it does not cut what is playing and stop…() will not touch it.
+ *
+ * The round bed is "three-part": [intro][loopStart <-> loopEnd][outro]. The loop is watched with a
+ * 40 ms interval ('timeupdate' is too coarse and requestAnimationFrame stalls when the graphics
+ * window is not the active one).
+ */
+
+/* ---------- iPad / iPhone (Safari) ----------
+ * Safari plays an <audio> element only once a tap has started THAT element: a fresh new Audio()
+ * played later from a network message stays silent. A screen that replays the engine's sounds
+ * (AudienceMirror.js) unlocks a pool of elements inside the tap that turns its sound on
+ * (unlockAudioPool), and every sound reuses a free one of them. Safari's Ogg support is patchy
+ * too: an .ogg / .oga file plays its .mp3 twin (same name, in Sounds/) where Ogg cannot play.
+ *
+ * iOS also pauses every playing element on an audio interruption (a call, Siri, a notification,
+ * another app, Control Center...) and never resumes them: the sound just stops. Each element
+ * knows whether it should be playing (__want); a 'pause' it did not ask for calls
+ * window.onSoundInterrupted(a) - the screens show their "tap" overlay and resumeInterruptedSounds()
+ * plays them again inside the tap. iOS also ignores .volume (read-only there), so fades count
+ * their steps instead of waiting for the volume to reach 0. */
+var AUDIO_POOL = [];
+
+/* watch an element once: a pause nobody asked for = an interruption */
+function watchSoundElement(a) {
+	if (a.__watched) { return a; }
+	a.__watched = true;
+	a.addEventListener('ended', function () { a.__want = false; });
+	a.addEventListener('pause', function () {
+		if (a.__want && !a.ended && typeof window.onSoundInterrupted === 'function') { window.onSoundInterrupted(a); }
+	});
+	return a;
+}
+function soundInterrupted() {
+	return AUDIO_POOL.concat(window.GameVariables.AudioChannels.map(function (c) { return window.GameVariables[c]; }))
+		.filter(function (a, i, all) { return a && all.indexOf(a) === i && a.__want && a.paused && !a.ended; });
+}
+/* inside a tap: play again what an interruption stopped */
+function resumeInterruptedSounds() {
+	soundInterrupted().forEach(function (a) {
+		try { var p = a.play(); if (p && p.catch) { p.catch(function () {}); } } catch (e) { /* ignore */ }
+	});
+}
+var OGG_PLAYABLE = (function () { try { return !!new Audio().canPlayType('audio/ogg; codecs="vorbis"'); } catch (e) { return true; } })();
+
+function soundUrl(filename) {
+	return 'Sounds/' + (!OGG_PLAYABLE && /\.og[ga]$/i.test(filename) ? filename.replace(/\.og[ga]$/i, '.mp3') : filename);
+}
+
+/* inside a tap: play `silence` on n elements, so each may play again later without one */
+function unlockAudioPool(n, silence) {
+	function unlock(a) {
+		try {
+			var p = a.play();
+			if (p && p.then) { p.then(function () { a.pause(); }, function () { /* not unlocked - still usable as a plain element */ }); }
+			else { a.pause(); }
+		} catch (e) { /* ignore */ }
+	}
+	/* an element of an earlier, refused unlock (idle): again, with silence */
+	AUDIO_POOL.forEach(function (a) { if (a.paused && !a.__want) { a.src = silence; unlock(a); } });
+	while (AUDIO_POOL.length < n) { var a = watchSoundElement(new Audio(silence)); AUDIO_POOL.push(a); unlock(a); }
+}
+
+/* stuck: a fire-and-forget sound that "plays" well past its own length - iOS can leave an element
+ * playing-but-silent (stalled) for ever; it would hold its pool slot for good */
+function soundStuck(a) {
+	if (!a.__started || a.paused || a.ended || a.loop) { return false; }
+	var len = isFinite(a.duration) && a.duration > 0 ? a.duration : 30;
+	return Date.now() - a.__started > len * 1000 + 4000;
+}
+
+/* a free unlocked element (not held by a channel, not playing), else a stuck one, else a new one.
+ * On an iPad a new one stays silent (no tap started it): once the 16 of the pool were all taken by
+ * sounds that never ended, every later sound was lost - even the next ones. */
+function newSoundElement(src) {
+	var held = window.GameVariables.AudioChannels.map(function (c) { return window.GameVariables[c]; });
+	function take(a) {
+		a.__want = false;   /* before pause(): this pause is wanted */
+		try { if (!a.paused) { a.pause(); } } catch (e) { /* ignore */ }
+		a.onended = null; a.volume = 1; a.muted = false; a.loop = false;
+		a.src = src;
+		a.__started = Date.now();
+		return a;
+	}
+	var i;
+	for (i = 0; i < AUDIO_POOL.length; i++) { if (held.indexOf(AUDIO_POOL[i]) === -1 && (AUDIO_POOL[i].paused || AUDIO_POOL[i].ended)) { return take(AUDIO_POOL[i]); } }
+	for (i = 0; i < AUDIO_POOL.length; i++) { if (held.indexOf(AUDIO_POOL[i]) === -1 && soundStuck(AUDIO_POOL[i])) { console.warn('[Audio] a stuck sound gives its element back', AUDIO_POOL[i].__file); return take(AUDIO_POOL[i]); } }
+	if (AUDIO_POOL.length) { console.warn('[Audio] every unlocked element is busy - a new one (may stay silent on an iPad)'); }
+	var a = watchSoundElement(new Audio(src));
+	a.__started = Date.now();
+	return a;
+}
+
+/* ---------- the core: one channel ---------- */
+
+function startSound(channel, filename, overlap, onEnded) {
+	try {
+		if (!overlap) { stopSound(channel); }
+		var a = newSoundElement(soundUrl(filename));
+		a.__file = filename;   /* the name the engine uses, whatever file actually plays */
+		if (window.GameVariables.SoundAt === 'stage') { a.muted = true; }   /* the stage / audience screens play it instead */
+		a.onended = onEnded || null;   /* a property, not a listener: pool elements are reused */
+		if (!overlap) { window.GameVariables[channel] = a; }
+		a.__want = true;
+		var p = a.play();
+		if (p && p.catch) { p.catch(function (err) { console.warn('[Audio] play blocked/failed', filename, err && err.message); }); }
+		return a;
+	}
+	catch (e) { console.error('[Audio] play failed', filename, e); return null; }
+}
+
+function stopSound(channel) {
+	if (window.GameVariables.FadeIntervals[channel]) {
+		clearInterval(window.GameVariables.FadeIntervals[channel]);
+		window.GameVariables.FadeIntervals[channel] = null;
+	}
+	var a = window.GameVariables[channel];
+	if (a) {
+		a.__want = false;   /* before pause(): this pause is wanted */
+		try { a.pause(); } catch (e) { /* ignore */ }
+		window.GameVariables[channel] = null;
+	}
+}
+
+function fadeOutSound(channel, ms) {
+	var a = window.GameVariables[channel];
+	if (!a) { return; }
+	ms = ms || 1000;
+	/* counted steps: iOS ignores .volume, so waiting for it to reach 0 never ended (the sound
+	 * played on at full volume) - there it simply stops after `ms` */
+	var steps = Math.max(1, Math.round(ms / 50)), k = 0, from = a.volume;
+	if (window.GameVariables.FadeIntervals[channel]) { clearInterval(window.GameVariables.FadeIntervals[channel]); }
+	window.GameVariables.FadeIntervals[channel] = setInterval(function () {
+		k += 1;
+		if (k >= steps) { stopSound(channel); }
+		else { try { a.volume = Math.max(0, from * (1 - k / steps)); } catch (e) { /* read-only (iOS) */ } }
+	}, 50);
+}
+
+/* ---------- the channels by their Olga names ---------- */
+
+function startGeneralSound(filename) { startSound('StingerSound', filename, true); }             /* always overlaps */
+function stopGeneralSound() { stopSound('StingerSound'); }
+
+function startLongActiveSound(filename, overlap) { startSound('ResultSound', filename, overlap); }
+function stopLongActiveSound() { stopSound('ResultSound'); }
+
+function startShortActiveSound(filename, overlap) { startSound('BuzzerSound', filename || 'kd_buzz.mp3', overlap); }
+function playBuzzerSound() { startSound('BuzzerSound', 'kd_buzz.mp3', false); }                 /* the buzzer, never cut by a result sting */
+
+function startShortPassiveSound(filename) { startSound('TimerSound', filename, false); }
+/* the clock music of a clock resumed `sec` seconds in (GameSave.js) */
+function seekShortPassiveSound(sec) {
+	var a = window.GameVariables.TimerSound;
+	if (!a || !(sec > 0)) { return; }
+	function go() { try { a.currentTime = sec; } catch (e) { /* not seekable */ } }
+	if (a.readyState >= 1) { go(); } else { a.addEventListener('loadedmetadata', go, { once: true }); }
+}
+function stopShortPassiveSound() { stopSound('TimerSound'); }
+/* hold the clock music still / go on (Câu hỏi phụ: a buzz while the 15 s run). Functions, not a
+ * bare TimerSound.pause(), so the screens that play the sound are told too (relayed below);
+ * `at` = where the music stood here, so a screen picks up at the same point */
+function pauseShortPassiveSound() {
+	var a = window.GameVariables.TimerSound;
+	if (a) { a.__want = false; try { a.pause(); } catch (e) { /* ignore */ } }
+}
+function resumeShortPassiveSound(at) {
+	var a = window.GameVariables.TimerSound;
+	if (!a) { return; }
+	if (typeof at === 'number' && isFinite(at)) { try { a.currentTime = at; } catch (e) { /* not seekable */ } }
+	a.__want = true;
+	var p = a.play();
+	if (p && p.catch) { p.catch(function () {}); }
+}
+
+function startLifelineActiveSound(filename) { startSound('StarSound', filename, true); }
+function startLifelinePassiveSound(filename) { startSound('AmbientSound', filename, false); }
+function stopLifelinePassiveSound() { stopSound('AmbientSound'); }
+
+function stopAllSounds() {
+	window.GameVariables.AudioChannels.forEach(function (channel) { stopSound(channel); });
+	stopLongPassiveSound();
+}
+
+/* ---------- LongPassiveSound: the three-part round bed ---------- */
+
+/* Publishes the bed position so the control panel can show "bed at 37.2 s" without ticks. */
+function publishBedState() {
+	var a = window.GameVariables.RoundBedSound;
+	if (!a) { window.GameVariables.BedState = null; }
+	else {
+		window.GameVariables.BedState = {
+			file: window.GameVariables.BedFile,
+			wallStart: Date.now(),
+			offset: a.currentTime,
+			looping: window.GameVariables.IsBedLooping,
+			loopStart: window.GameVariables.BedLoopStart,
+			loopEnd: window.GameVariables.BedLoopEnd,
+			paused: a.paused
+		};
+	}
+	if (window.GameVariables.changed) { window.GameVariables.changed(); }
+}
+
+function watchLongPassiveSound() {
+	var a = window.GameVariables.RoundBedSound;
+	if (!a || a.paused) { return; }
+	if (window.GameVariables.IsBedLooping && window.GameVariables.BedLoopEnd > window.GameVariables.BedLoopStart && a.currentTime >= window.GameVariables.BedLoopEnd) {
+		var next = window.GameVariables.BedNextLoop;
+		if (next) {   /* the pass is over: the queued loop takes over (setLongPassiveLoop) */
+			window.GameVariables.BedNextLoop = null;
+			window.GameVariables.BedLoopStart = next.start;
+			window.GameVariables.BedLoopEnd = next.end;
+			/* a loop that starts where the last one ended just runs on */
+			if (Math.abs(a.currentTime - next.start) > 0.3) { a.currentTime = next.start; }
+			console.log('[Audio] bed loop now ' + next.start + '-' + next.end + 's');
+		}
+		else {
+			a.currentTime = window.GameVariables.BedLoopStart;
+			console.log('[Audio] bed loop -> ' + window.GameVariables.BedLoopStart + 's');
+		}
+		publishBedState();
+	}
+}
+
+/* New loop points for the bed that plays. afterCurrent: the pass under way finishes first (the new
+ * loop starts when the old one reaches its end); otherwise at once. Releasing the bed afterwards
+ * just stops the looping - it plays on to its end (Luật rừng 2's board turn, Rounds/KdBoard.js). */
+function setLongPassiveLoop(start, end, afterCurrent) {
+	var g = window.GameVariables;
+	g.BedReleaseTo = 0;
+	g.BedReleaseSlack = 0;
+	if (afterCurrent && g.IsBedLooping && g.BedLoopEnd > g.BedLoopStart) {
+		g.BedNextLoop = (g.BedLoopStart === start && g.BedLoopEnd === end) ? null : { start: start, end: end };
+	}
+	else {
+		g.BedNextLoop = null;
+		g.BedLoopStart = start;
+		g.BedLoopEnd = end;
+		g.IsBedLooping = end > start;
+	}
+	publishBedState();
+}
+
+function stopBedWatch() {
+	if (window.GameVariables.BedWatchInterval) {
+		clearInterval(window.GameVariables.BedWatchInterval);
+		window.GameVariables.BedWatchInterval = null;
+	}
+}
+
+/* Plays a bed with the loop points from BedLoops (a file without an entry plays straight through).
+ * straight: ignore the loop points (Luật rừng's 60 s individual turn - KhoiDong.js). */
+function startLongPassiveSound(filename, straight) {
+	stopLongPassiveSound();
+	var def = straight ? null : window.GameVariables.BedLoops[filename];
+	if (!def && !straight) { console.warn('[Audio] no loop points for', filename, '- playing straight through'); }
+	window.GameVariables.IsBedStraight = !!straight;
+	window.GameVariables.BedNextLoop = null;
+	window.GameVariables.BedFile = filename;
+	window.GameVariables.BedLoopStart = def ? def.loopStart : 0;
+	window.GameVariables.BedLoopEnd = def ? def.loopEnd : 0;
+	window.GameVariables.BedReleaseTo = def && typeof def.releaseTo === 'number' ? def.releaseTo : window.GameVariables.BedLoopEnd;
+	window.GameVariables.BedReleaseSlack = def ? (def.releaseSlack || 0) : 0;
+	window.GameVariables.IsBedLooping = window.GameVariables.BedLoopEnd > window.GameVariables.BedLoopStart;
+	var a = startSound('RoundBedSound', filename, false, function () {
+		window.GameVariables.IsBedLooping = false;
+		publishBedState();
+	});
+	if (a) {
+		a.addEventListener('playing', function onPlaying() {
+			a.removeEventListener('playing', onPlaying);
+			publishBedState();
+		});
+		window.GameVariables.BedWatchInterval = setInterval(watchLongPassiveSound, 40);
+	}
+	publishBedState();
+}
+
+/* Leave the loop so the outro plays. Seeks forward to releaseTo if we are before it - but not
+ * when already within releaseSlack seconds of it (a 1-2 s jump sounds worse than running on). */
+function releaseLongPassiveSound() {
+	var a = window.GameVariables.RoundBedSound;
+	if (!a) { return; }
+	window.GameVariables.IsBedLooping = false;
+	window.GameVariables.BedNextLoop = null;
+	var t = a.currentTime;
+	if (t < window.GameVariables.BedReleaseTo - window.GameVariables.BedReleaseSlack) {
+		a.currentTime = window.GameVariables.BedReleaseTo;
+		console.log('[Audio] bed released ' + t.toFixed(1) + 's -> ' + window.GameVariables.BedReleaseTo + 's');
+	}
+	else {
+		console.log('[Audio] bed released at ' + t.toFixed(1) + 's - close enough, no seek');
+	}
+	publishBedState();
+}
+
+function stopLongPassiveSound() {
+	stopBedWatch();
+	stopSound('RoundBedSound');
+	window.GameVariables.BedFile = null;
+	window.GameVariables.IsBedLooping = false;
+	publishBedState();
+}
+
+function fadeOutLongPassiveSound(ms) {
+	stopBedWatch();
+	window.GameVariables.IsBedLooping = false;
+	fadeOutSound('RoundBedSound', ms);
+	setTimeout(function () { window.GameVariables.BedFile = null; publishBedState(); }, (ms || 1000) + 60);
+}
+
+/* ---------- where the sound plays (room mode) ----------
+ * In a room the engine runs in the control panel, so its sound would come out of the operator's
+ * machine - so in a room SoundAt is always 'stage': every sound call below is relayed on
+ * pub:CODE and replayed by the stage and audience screens; here the audio still runs (clocks,
+ * bed loop) but muted. The engine a control panel runs is silent even without a room; a
+ * graphics page opened on its own without a room ('here') is the stage and plays it itself.
+ * Only the outermost call is relayed (startLongPassiveSound calls startSound itself...), and
+ * callbacks stay here. */
+(function (gv) {
+	if (!gv.Sync || !gv.Sync.publish) { return; }   /* not the engine (a stage screen only replays - AudienceMirror.js) */
+	/* in a room the engine runs inside the control panel: its sound only ever plays on the stage
+	 * and audience screens. Without a room this page IS the stage, so it plays here. */
+	function inRoom() { return !!(gv.Sync && gv.Sync.room); }
+	/* the engine a control panel runs (?embedded=1) is always silent, room or not */
+	var embedded = new URLSearchParams(location.search).get('embedded') === '1';
+	function silentHere() { return embedded || inRoom(); }
+	/* read live: Sync.room is only set once the room is joined, after this file runs */
+	Object.defineProperty(gv, 'SoundAt', { configurable: true, get: function () { return silentHere() ? 'stage' : 'here'; }, set: function () { /* fixed */ } });
+
+	var depth = 0;
+	function relay(op, args) {
+		if (gv.SoundAt === 'here' || !gv.Sync || !gv.Sync.room || !gv.Sync.sendPublic) { return; }
+		var plain = Array.prototype.slice.call(args).filter(function (a) { return typeof a !== 'function'; });
+		gv.Sync.sendPublic({ type: 'sound', op: op, args: plain, at: Date.now() });
+	}
+	['startSound', 'stopSound', 'fadeOutSound', 'seekShortPassiveSound', 'pauseShortPassiveSound', 'resumeShortPassiveSound', 'stopAllSounds',
+		'startLongPassiveSound', 'releaseLongPassiveSound', 'stopLongPassiveSound', 'fadeOutLongPassiveSound', 'setLongPassiveLoop'].forEach(function (name) {
+		var orig = window[name];
+		window[name] = function () {
+			if (depth === 0) { relay(name, arguments); }
+			depth++;
+			try { return orig.apply(this, arguments); }
+			finally { depth--; }
+		};
+	});
+
+	function channelAudios() {
+		return gv.AudioChannels.map(function (c) { return { ch: c, a: gv[c] }; }).filter(function (x) { return !!x.a; });
+	}
+	function fileOf(a) { if (a.__file) { return a.__file; } try { return decodeURIComponent(new URL(a.src).pathname.split('/').pop()); } catch (e) { return ''; } }
+
+	/* what is playing now, for screens that start hearing mid-sound (a new choice, a screen just opened) */
+	function sendCurrent() {
+		channelAudios().forEach(function (x) {
+			if (x.a.paused || x.a.ended) { return; }
+			var file = fileOf(x.a);
+			if (!file) { return; }
+			if (x.ch === 'RoundBedSound') {
+				gv.Sync.sendPublic({ type: 'sound', op: 'startLongPassiveSound', args: gv.IsBedStraight ? [file, true] : [file], at: Date.now(), seek: x.a.currentTime, ch: x.ch });
+				/* the loop points as they are now (setLongPassiveLoop may have moved them) */
+				if (gv.IsBedLooping) {
+					gv.Sync.sendPublic({ type: 'sound', op: 'setLongPassiveLoop', args: [gv.BedLoopStart, gv.BedLoopEnd], at: Date.now() });
+					if (gv.BedNextLoop) { gv.Sync.sendPublic({ type: 'sound', op: 'setLongPassiveLoop', args: [gv.BedNextLoop.start, gv.BedNextLoop.end, true], at: Date.now() }); }
+				}
+				else if (!gv.IsBedStraight) { gv.Sync.sendPublic({ type: 'sound', op: 'setLongPassiveLoop', args: [0, 0], at: Date.now() }); }
+			}
+			else { gv.Sync.sendPublic({ type: 'sound', op: 'startSound', args: [x.ch, file, false], at: Date.now(), seek: x.a.currentTime, ch: x.ch }); }
+		});
+	}
+	gv.sendCurrentSounds = function () { if (gv.SoundAt !== 'here' && gv.Sync && gv.Sync.room) { sendCurrent(); } };
+
+	gv.Commands = gv.Commands || {};
+	/* kept so an older panel's command does nothing harmful: the choice is fixed now */
+	gv.Commands.setSoundAt = function () {
+		channelAudios().forEach(function (x) { x.a.muted = silentHere(); });
+	};
+})(window.GameVariables);
