@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Olympia Controller - Quản lý câu hỏi</title>
+	<link rel="stylesheet"
+		href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Roboto+Mono:wght@500&family=JetBrains+Mono:wght@500;700&display=swap">
+	<link rel="stylesheet" type="text/css" href="Styles/lobby.css?v=20261116c">
+	<link rel="stylesheet" type="text/css" href="Styles/questions.css?v=20261116c">
+	<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
+	<script src="Scripts/Config.js?v=20261116c"></script>
+	<script src="Scripts/Auth.js?v=20261116c"></script>
+	<script src="Scripts/QuestionEditor.js?v=20261116c" defer></script>
+</head>
+
+<body>
+	<main class="wrap qe">
+		<header class="top">
+			<div>
+				<p class="eyebrow">Olympia Controller · <a href="index.html" class="back">← Sảnh</a></p>
+				<h1>Quản lý câu hỏi</h1>
+				<p class="meta" id="roomLine"></p>
+			</div>
+			<div class="who">
+				<button type="button" class="btn" id="openGuide">Hướng dẫn tạo thư mục XML</button>
+				<span id="whoName"></span>
+			</div>
+		</header>
+
+		<p class="notice hidden" id="notice"></p>
+
+		<!-- ============ the sets ============ -->
+		<section class="card">
+			<div class="setBar">
+				<label class="grow">Bộ đề đang sửa
+					<select id="setSelect"></select>
+				</label>
+				<button type="button" class="btn" id="newBlank">Bộ đề mới (trống)</button>
+				<button type="button" class="btn" id="showUpload">Tải lên thư mục…</button>
+			</div>
+			<!-- only with a room: play the site's test set (Demo/) instead of a set of one's own -->
+			<div class="demoBar hidden" id="demoBar">
+				<p class="meta" id="roomSetLine"></p>
+				<button type="button" class="btn sm" id="useDemo">Dùng bộ đề thử nghiệm</button>
+			</div>
+			<div class="setInfo" id="setInfo">
+				<p class="meta" id="setMeta">—</p>
+				<div class="setActions">
+					<button type="button" class="btn sm primary" id="useForRoom">Dùng cho phòng này</button>
+					<button type="button" class="btn sm" id="renameSet">Đổi tên</button>
+					<button type="button" class="btn sm danger" id="deleteSet">Xoá bộ đề</button>
+				</div>
+			</div>
+			<form id="uploadForm" class="row hidden">
+				<label class="grow">Tên bộ đề
+					<input type="text" id="upName" maxlength="80" placeholder="Ví dụ: Tuần 3 — Quý 2" required>
+				</label>
+				<label>Thư mục bộ đề (giống thư mục Questions/)
+					<input type="file" id="upFiles" webkitdirectory directory multiple required>
+				</label>
+				<button type="submit" class="btn primary" id="upBtn">Tải lên</button>
+			</form>
+			<p class="meta" id="progress"></p>
+			<p class="error" id="error" role="alert"></p>
+		</section>
+
+		<!-- ============ the editor ============ -->
+		<section class="card editorCard hidden" id="editor">
+			<!-- the rounds: a column on wide screens, a strip you can swipe on a phone; the counts are the questions written (QuestionEditor.js tabCounts) -->
+			<nav class="qeNav" aria-label="Phần thi">
+				<div class="tabs" id="tabs" role="tablist">
+					<button type="button" class="tab" data-t="players"><span class="tLabel">Thí sinh</span><span class="tCount" aria-hidden="true"></span><span class="tBar" aria-hidden="true"><i></i></span></button>
+					<button type="button" class="tab" data-t="kd"><span class="tLabel">Khởi động</span><span class="tCount" aria-hidden="true"></span><span class="tBar" aria-hidden="true"><i></i></span></button>
+					<button type="button" class="tab" data-t="vcnv"><span class="tLabel">Vượt chướng ngại vật</span><span class="tCount" aria-hidden="true"></span><span class="tBar" aria-hidden="true"><i></i></span></button>
+					<button type="button" class="tab" data-t="tt"><span class="tLabel">Tăng tốc</span><span class="tCount" aria-hidden="true"></span><span class="tBar" aria-hidden="true"><i></i></span></button>
+					<button type="button" class="tab" data-t="vd"><span class="tLabel">Về đích</span><span class="tCount" aria-hidden="true"></span><span class="tBar" aria-hidden="true"><i></i></span></button>
+					<button type="button" class="tab" data-t="tb"><span class="tLabel">Câu hỏi phụ</span><span class="tCount" aria-hidden="true"></span><span class="tBar" aria-hidden="true"><i></i></span></button>
+					<button type="button" class="tab" data-t="media"><span class="tLabel">Ảnh / video</span><span class="tCount" aria-hidden="true"></span><span class="tBar" aria-hidden="true"><i></i></span></button>
+				</div>
+			</nav>
+			<div class="qeMain">
+				<!-- which rules the forms follow (Scripts/QuestionEditor.js, Scripts/Rules.js); the files hold both -->
+				<div class="rulesBar">
+					<span class="rulesName" id="qeRulesName">Soạn theo luật</span>
+					<div class="seg" id="qeRules" role="radiogroup" aria-labelledby="qeRulesName">
+						<label><input type="radio" name="qeRules" value="o26" checked>Olympia 26</label>
+						<label><input type="radio" name="qeRules" value="o24">Olympia 24</label>
+						<label><input type="radio" name="qeRules" value="o23">Olympia 23</label>
+						<label><input type="radio" name="qeRules" value="jungle">Luật rừng</label>
+						<label><input type="radio" name="qeRules" value="jungle2">Luật rừng 2</label>
+					</div>
+					<p class="meta" id="qeRulesNote"></p>
+				</div>
+				<div class="panes">
+					<div class="pane" data-t="players" id="paneplayers"></div>
+					<div class="pane" data-t="kd" id="panekd"></div>
+					<div class="pane" data-t="vcnv" id="panevcnv"></div>
+					<div class="pane" data-t="tt" id="panett"></div>
+					<div class="pane" data-t="vd" id="panevd"></div>
+					<div class="pane" data-t="tb" id="panetb"></div>
+					<div class="pane" data-t="media" id="panemedia"></div>
+					<div class="skeleton" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+				</div>
+			</div>
+		</section>
+
+		<!-- how to build a set folder by hand (for those who prefer editing XML) -->
+		<dialog class="guide" id="guideDialog">
+			<div class="gHead"><b>Hướng dẫn tạo thư mục bộ câu hỏi bằng XML</b><button type="button" class="btn sm" id="closeGuide">Đóng</button></div>
+			<div class="gBody">
+				<p>Có thể soạn bộ đề ngay trên trang này. Nếu muốn soạn bằng tay (Notepad, VS Code...), hãy tạo một thư mục
+					theo mẫu dưới đây rồi bấm <b>Tải lên thư mục…</b>. Cùng thư mục này cũng chép được vào <code>Questions/</code>
+					trên máy sân khấu khi chạy không qua phòng. Phòng phải chọn một bộ đề (hoặc <b>Dùng bộ đề thử nghiệm</b>);
+					chưa chọn thì mọi câu hỏi sẽ báo "chưa thiết lập".</p>
+
+				<h3>1. Cấu trúc thư mục</h3>
+				<pre>Tuan3/
+├─ players.xml      thí sinh (tuỳ chọn - thiếu thì dùng "Thí sinh 1..4")
+├─ khoidong.xml     Khởi động                (bắt buộc)
+├─ vcnv.xml         Vượt chướng ngại vật      (bắt buộc)
+├─ tangtoc.xml      Tăng tốc                  (bắt buộc)
+├─ vedich.xml       Về đích                   (bắt buộc)
+├─ cauhoiphu.xml    Câu hỏi phụ (tuỳ chọn - thiếu thì dùng câu mẫu; tối thiểu 3 câu)
+├─ vcnv_anh.png     ảnh chướng ngại vật
+├─ tt1.png  tt2.jpg  tt3.png  tt4.mp4      ảnh / video Tăng tốc
+└─ ...</pre>
+				<ul>
+					<li>Tên file XML phải đúng như trên (chữ thường). Ảnh / video đặt cùng thư mục, có thể trong thư mục con.</li>
+					<li>Ảnh: PNG, JPG, GIF, WEBP. Video: MP4, WEBM. Mỗi file tối đa 50 MB.</li>
+					<li>Trong XML ghi <b>tên file</b>, ví dụ <code>tt1.png</code>. Nếu thư mục còn được chép vào <code>Questions/</code> trên
+						máy sân khấu thì ghi <code>Questions/tt1.png</code> - cách ghi này dùng được cho cả hai nơi. Tên có dấu
+						hay khoảng trắng vẫn được (khi tải lên sẽ đổi thành không dấu, nối bằng <code>_</code>, ví dụ
+						<code>Hình 1.png</code> → <code>hinh_1.png</code>).</li>
+					<li>Lưu file ở dạng <b>UTF-8</b>. Không dùng HTML trong câu hỏi. Ký tự <code>&amp;</code> <code>&lt;</code>
+						<code>&gt;</code> phải viết là <code>&amp;amp;</code> <code>&amp;lt;</code> <code>&amp;gt;</code>.</li>
+					<li><code>&lt;text&gt;</code> hiện trên đồ hoạ; <code>&lt;answer&gt;</code> chỉ hiện cho người quản lý phòng ở bàn điều khiển.</li>
+				</ul>
+
+				<h3>2. players.xml</h3>
+				<pre>&lt;players&gt;
+  &lt;player seat="1"&gt;&lt;name&gt;Nguyễn Văn An&lt;/name&gt;&lt;school&gt;THPT ...&lt;/school&gt;&lt;/player&gt;
+  ... ghế 2, 3, 4
+&lt;/players&gt;</pre>
+				<p>Tên hiển thị trên đồ hoạ là 2 từ cuối của họ tên ("Văn An").</p>
+
+				<h3>3. khoidong.xml — 6 câu lượt riêng mỗi ghế, 12 câu lượt chung</h3>
+				<p>Luật <b>Olympia 23</b>: không có lượt riêng; <code>&lt;common&gt;</code> chứa <b>36 câu</b> cho 3 lượt chung liền
+					nhau: câu 1–8 là lượt 1, câu 9–20 là lượt 2, câu 21–36 là lượt 3. Phòng chơi luật Olympia 26 / 24 chỉ dùng
+					12 câu đầu, nên một file đủ 6 câu mỗi ghế + 36 câu chung dùng được cho cả ba luật.</p>
+				<p><b>Luật rừng</b>: mỗi <code>&lt;individual&gt;</code> có <b>12 câu</b> (thí sinh có 60 giây), cộng
+					tối đa <b>4 câu bổ sung</b> là câu 13–16 (chỉ hỏi khi thí sinh giành được: cứ 3 câu đúng liên tiếp được 1 câu).
+					<code>&lt;common&gt;</code> dùng <b>24 câu</b>: câu 1–8 là lượt đối kháng 1, câu 9–24 là lượt 2. Luật Olympia 26 / 24
+					chỉ đọc 6 câu riêng đầu và 12 câu chung đầu.</p>
+				<p><b>Video intro</b> (tuỳ chọn, mọi luật): thêm <code>&lt;intro&gt;intro.mp4&lt;/intro&gt;</code> vào
+					<code>&lt;khoidong&gt;</code> (tải file video lên cùng bộ đề). Ở bước đầu phần thi Khởi động, phím ← chiếu
+					video toàn màn hình; bấm ← lần nữa để ẩn video (đang chiếu hay đã hết), rồi ← để vào phần thi.</p>
+				<pre>&lt;khoidong&gt;
+  &lt;individual seat="1"&gt;
+    &lt;question&gt;&lt;text&gt;Câu hỏi 1 của ghế 1?&lt;/text&gt;&lt;answer&gt;Đáp án&lt;/answer&gt;&lt;/question&gt;
+    ... đủ 6 câu
+  &lt;/individual&gt;
+  ... seat="2", "3", "4"
+  &lt;common&gt;
+    &lt;question&gt;&lt;text&gt;Câu hỏi lượt chung 1?&lt;/text&gt;&lt;answer&gt;Đáp án&lt;/answer&gt;&lt;/question&gt;
+    ... đủ 12 câu
+  &lt;/common&gt;
+&lt;/khoidong&gt;</pre>
+
+				<h3>4. vcnv.xml — từ khoá, ảnh, 4 hàng ngang, ô trung tâm</h3>
+				<pre>&lt;vcnv&gt;
+  &lt;keyword&gt;&lt;text&gt;CHƯỚNG NGẠI VẬT&lt;/text&gt;&lt;/keyword&gt;
+  &lt;image&gt;Questions/vcnv_anh.png&lt;/image&gt;
+  &lt;row&gt;&lt;text&gt;Câu hỏi hàng ngang 1&lt;/text&gt;&lt;answer&gt;ĐÁPÁN&lt;/answer&gt;&lt;/row&gt;
+  ... 4 dòng &lt;row&gt;
+  &lt;center&gt;&lt;text&gt;Câu hỏi ô trung tâm&lt;/text&gt;&lt;answer&gt;Đáp án&lt;/answer&gt;&lt;/center&gt;
+&lt;/vcnv&gt;</pre>
+				<ul>
+					<li>Mỗi chữ (không tính khoảng trắng) của đáp án hàng ngang là một ô tròn; tối đa 10 ô.</li>
+					<li>Ảnh là một file nguyên, không cần cắt: sân khấu tự che bằng 4 miếng góc + 1 miếng giữa.</li>
+				</ul>
+
+				<h3>5. tangtoc.xml — 4 câu</h3>
+				<pre>&lt;tangtoc&gt;
+  &lt;question&gt;
+    &lt;text&gt;Câu hỏi tăng tốc 1&lt;/text&gt;
+    &lt;media type="image"&gt;Questions/tt1.png&lt;/media&gt;
+    &lt;answerMedia type="image"&gt;tt1_dapan.png&lt;/answerMedia&gt;   (tuỳ chọn)
+    &lt;answer&gt;Đáp án&lt;/answer&gt;
+  &lt;/question&gt;
+  ... câu 2, 3, 4; video: &lt;media type="video"&gt;tt4.mp4&lt;/media&gt;
+&lt;/tangtoc&gt;</pre>
+				<p>Thời gian mỗi câu do luật quyết định: <b>Olympia 26</b> 20 / 20 / 30 / 30 giây, <b>Olympia 24</b> và <b>Olympia 23</b> 10 / 20 / 30 / 40 giây, luật rừng 30 giây mỗi câu. Thuộc tính <code>seconds</code> trong file cũ (nếu có) không còn được đọc.</p>
+
+				<h3>6. vedich.xml — mỗi ghế 3 câu 20 điểm + 3 câu 30 điểm</h3>
+				<pre>&lt;vedich&gt;
+  &lt;package seat="1"&gt;
+    &lt;question value="20"&gt;&lt;text&gt;Câu 20 điểm thứ nhất&lt;/text&gt;&lt;answer&gt;Đáp án&lt;/answer&gt;&lt;/question&gt;
+    ... 3 câu value="20", 3 câu value="30"
+  &lt;/package&gt;
+  ... seat="2", "3", "4"
+&lt;/vedich&gt;</pre>
+				<p>Câu 20 điểm thứ k / câu 30 điểm thứ k được dùng theo thứ tự thí sinh chọn gói.</p>
+				<p>Câu có ảnh hoặc video: thêm <code>&lt;media type="image"&gt;anh.png&lt;/media&gt;</code> (hoặc
+					<code>type="video"</code>, file .mp4) vào trong <code>&lt;question&gt;</code>. Trên sân khấu, phím <b>B</b> bật / tắt ảnh bất
+					cứ lúc nào; video thì bấm B trước khi bật giờ - video chạy hết (không quay lại đồ hoạ được), đồng hồ trả lời
+					tự bật 1 giây sau khi video kết thúc.</p>
+
+				<h3>7. cauhoiphu.xml — tối thiểu 3 câu (luật Olympia 26 không giới hạn)</h3>
+				<pre>&lt;cauhoiphu&gt;
+  &lt;question&gt;&lt;text&gt;Câu hỏi phụ 1&lt;/text&gt;&lt;answer&gt;Đáp án&lt;/answer&gt;&lt;/question&gt;
+  ... Olympia 26: bao nhiêu câu cũng được, hỏi lần lượt đến khi có người đúng
+  ... các luật khác chỉ dùng 3 câu đầu (câu thứ 4 trở đi bị bỏ qua)
+&lt;/cauhoiphu&gt;</pre>
+
+				<h3>8. Tải bộ mẫu về để sửa</h3>
+				<p>Mỗi file mẫu đã có đủ số câu đúng định dạng; mở bằng trình soạn văn bản, thay nội dung rồi lưu lại (UTF-8).</p>
+				<div class="dl">
+					<a class="btn sm" href="Demo/players.xml" download>players.xml</a>
+					<a class="btn sm" href="Demo/khoidong.xml" download>khoidong.xml</a>
+					<a class="btn sm" href="Demo/vcnv.xml" download>vcnv.xml</a>
+					<a class="btn sm" href="Demo/tangtoc.xml" download>tangtoc.xml</a>
+					<a class="btn sm" href="Demo/vedich.xml" download>vedich.xml</a>
+					<a class="btn sm" href="Demo/cauhoiphu.xml" download>cauhoiphu.xml</a>
+				</div>
+
+				<h3>9. Tải lên</h3>
+				<ol>
+					<li>Bấm <b>Tải lên thư mục…</b>, đặt tên bộ đề, chọn cả thư mục.</li>
+					<li>Thiếu một trong 4 file bắt buộc thì trang sẽ báo, không tải gì.</li>
+					<li>Sau khi tải xong, kiểm tra lại từng tab (ảnh có hiện trong ô xem trước không), rồi bấm
+						<b>Dùng cho phòng này</b> và tải lại màn sân khấu.</li>
+				</ol>
+			</div>
+		</dialog>
+
+		<div class="saveBar hidden" id="saveBar" role="status">
+			<span class="dot" aria-hidden="true"></span>
+			<span id="saveState">Chưa có thay đổi.</span>
+			<button type="button" class="btn" id="revert">Bỏ thay đổi</button>
+			<button type="button" class="btn primary" id="save">Lưu bộ đề</button>
+		</div>
+	</main>
+</body>
+
+</html>
